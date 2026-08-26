@@ -1,0 +1,42 @@
+# ============================================================
+# syslog-daemon configuration example
+# ============================================================
+
+# ---- Syslog UDP listener ----
+syslog:
+  listenAddr: "0.0.0.0:514"      # UDP bind address (may require root if <1024)
+  workers: 8                      # concurrent processing workers (high-throughput)
+  readBufferBytes: 4194304        # UDP socket receive buffer (4 MiB)
+  maxMessageBytes: 65536          # max syslog message size (64 KiB)
+
+# ---- Downstream cep-engine ----
+cepEngine:
+  baseUrl: "http://127.0.0.1:8080"
+  batchPath: "/api/v1/events/batch"
+  singlePath: "/api/v1/events"
+  authToken: ""                   # optional Bearer token if cep-engine requires auth
+  timeoutMs: 5000
+  retryMax: 3
+  retryBaseMs: 200
+
+# ---- Forwarding queue ----
+forward:
+  batchSize: 50                   # events per batch POST
+  batchFlushIntervalMs: 200       # max wait to fill a batch (ms)
+  workers: 4                      # forwarding workers
+  queueCapacity: 10000            # bounded queue size
+  queueFullPolicy: "drop"         # drop | block | single
+  dropLogEnabled: true            # log each dropped event
+
+# ---- Logging ----
+logging:
+  level: "info"                   # debug | info | warn | error
+  file: ""                        # empty -> stdout
+  maxSizeMB: 100
+  maxBackups: 5
+
+# ---- Prometheus self-monitoring ----
+metrics:
+  enabled: true
+  listenAddr: ":9092"
+  path: "/metrics"

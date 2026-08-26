@@ -1,0 +1,11 @@
+# Build output
+bin/
+
+# Temporary test files
+test-config.yaml
+test-wsl.sh
+build-wsl.sh
+
+# Logs
+*.log
+logs/
