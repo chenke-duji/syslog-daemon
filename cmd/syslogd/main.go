@@ -76,6 +76,10 @@ func main() {
 
 	// --- Syslog listener ---
 	handle := func(msg *syslog.Message, sourceIP string) {
+		logger.Info("received syslog",
+			"sourceIp", sourceIP,
+			"message", msg.Message,
+		)
 		ev := model.NewFromSyslog(msg, sourceIP, time.Now())
 		if !queue.Enqueue(ev) {
 			// dropped; batch queue logs + counts it
