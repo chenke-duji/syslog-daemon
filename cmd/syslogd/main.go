@@ -25,10 +25,23 @@ import (
 	"syslog-daemon/internal/syslog"
 )
 
+// build info (overridable at link time via -ldflags "-X main.buildVersion=... -X main.buildDate=...").
+var (
+	buildVersion = "dev"
+	buildDate    = "unknown"
+)
+
 func main() {
 	var configPath string
+	var showVersion bool
 	flag.StringVar(&configPath, "config", "", "path to YAML config file")
+	flag.BoolVar(&showVersion, "v", false, "print build/version info and exit")
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("syslog-daemon %s (%s)\n", buildVersion, buildDate)
+		return
+	}
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
