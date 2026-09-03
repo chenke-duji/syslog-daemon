@@ -20,7 +20,7 @@ VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo de
 BUILD_DATE?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS   := -ldflags "-X main.buildVersion=$(VERSION) -X main.buildDate=$(BUILD_DATE)"
 
-.PHONY: build build-linux-amd64 build-linux-arm64 build-linux test vet clean
+.PHONY: build build-linux-amd64 build-linux-arm64 build-linux test vet lint tidy coverage clean
 
 build:
 	$(GO) build $(LDFLAGS) -o $(BIN_DIR)/syslogd ./cmd/syslogd
@@ -39,6 +39,17 @@ test:
 
 vet:
 	$(GO) vet ./...
+
+lint:
+	@command -v golangci-lint >/dev/null 2>&1 || { echo "Installing golangci-lint..."; go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; }
+	golangci-lint run ./...
+
+tidy:
+	$(GO) mod tidy
+
+coverage:
+	$(GO) test -race -coverprofile=coverage.out ./...
+	$(GO) tool cover -func=coverage.out
 
 clean:
 	rm -rf $(BIN_DIR)

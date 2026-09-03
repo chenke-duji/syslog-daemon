@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+// maxHostnameLen is the maximum length of a hostname extracted by the
+// vendor-lenient parser. RFC 5424 does not strictly define a hostname length
+// limit, but in practice 255 characters is the DNS limit (RFC 1035). We use
+// 256 to allow one extra character margin.
+const maxHostnameLen = 256
+
 // Parse decodes a raw syslog line into a Message. It tries RFC5424 first, then
 // RFC3164, then a lenient vendor-style fallback. A Message is always returned
 // (never nil); Raw is always set. Parse errors are returned separately so the
@@ -160,13 +166,13 @@ func parseVendorLenient(s string, msg *Message) *Message {
 	}
 
 	// Try "hostname: message" or "hostname message" heuristics.
-	if idx := strings.Index(rest, ": "); idx > 0 && idx < 256 {
+	if idx := strings.Index(rest, ": "); idx > 0 && idx < maxHostnameLen {
 		msg.Hostname = rest[:idx]
 		msg.Message = rest[idx+2:]
 		return msg
 	}
 	// Fallback: first whitespace-delimited word as hostname.
-	if idx := strings.IndexByte(rest, ' '); idx > 0 && idx < 256 {
+	if idx := strings.IndexByte(rest, ' '); idx > 0 && idx < maxHostnameLen {
 		msg.Hostname = rest[:idx]
 		msg.Message = rest[idx+1:]
 		return msg
@@ -190,6 +196,11 @@ func isDigits(s string) bool {
 
 // parseStructuredData consumes RFC5424 STRUCTURED-DATA. Returns the SD map and
 // the remaining text after the last SD element.
+//
+// This implementation correctly handles escaped characters (\" \\ \]) and
+// ']' characters that appear inside quoted parameter values, which the
+// previous naive IndexByte(']') approach would misinterpret as element
+// terminators.
 func parseStructuredData(s string) (map[string]map[string]string, string) {
 	sd := make(map[string]map[string]string)
 	rest := strings.TrimLeft(s, " ")
@@ -207,7 +218,7 @@ func parseStructuredData(s string) (map[string]map[string]string, string) {
 		if rest[0] != '[' {
 			break
 		}
-		end := strings.IndexByte(rest, ']')
+		end := findSDElementEnd(rest)
 		if end < 0 {
 			break
 		}
@@ -221,48 +232,157 @@ func parseStructuredData(s string) (map[string]map[string]string, string) {
 	return sd, rest
 }
 
-// parseSDElement parses one "[sdid k1=v1 k2=v2]" element into sd.
-func parseSDElement(element string, sd map[string]map[string]string) {
-	fields := strings.Fields(element)
-	if len(fields) == 0 {
-		return
+// findSDElementEnd finds the index of the closing ']' for an SD element,
+// skipping ']' characters that appear inside quoted parameter values.
+func findSDElementEnd(s string) int {
+	if len(s) == 0 || s[0] != '[' {
+		return -1
 	}
-	sdID := fields[0]
-	params := make(map[string]string)
-	for _, f := range fields[1:] {
-		eq := strings.IndexByte(f, '=')
-		if eq <= 0 || eq == len(f)-1 {
+	inQuote := false
+	escaped := false
+	for i := 1; i < len(s); i++ {
+		if escaped {
+			escaped = false
 			continue
 		}
-		key := f[:eq]
-		val := f[eq+1:]
-		// Values may be quoted; strip surrounding quotes.
-		val = strings.Trim(val, `"`)
-		params[key] = val
+		c := s[i]
+		if c == '\\' && inQuote {
+			escaped = true
+			continue
+		}
+		if c == '"' {
+			inQuote = !inQuote
+			continue
+		}
+		if c == ']' && !inQuote {
+			return i
+		}
+	}
+	return -1
+}
+
+// parseSDElement parses one "[sdid k1=v1 k2=v2]" element into sd.
+// Handles escaped characters (\" \\ \]) and spaces inside quoted values.
+func parseSDElement(element string, sd map[string]map[string]string) {
+	// Parse SD-ID (up to first space).
+	idx := strings.IndexByte(element, ' ')
+	var sdID string
+	var rest string
+	if idx >= 0 {
+		sdID = element[:idx]
+		rest = element[idx+1:]
+	} else {
+		sdID = element
+		rest = ""
+	}
+	if sdID == "" {
+		return
+	}
+	params := make(map[string]string)
+	// Parse parameters: key="value" pairs, where value may contain
+	// escaped characters and spaces inside quotes.
+	for rest != "" {
+		rest = strings.TrimLeft(rest, " ")
+		if rest == "" {
+			break
+		}
+		eq := strings.IndexByte(rest, '=')
+		if eq <= 0 {
+			break
+		}
+		key := rest[:eq]
+		rest = rest[eq+1:]
+		if len(rest) == 0 || rest[0] != '"' {
+			// Value is not quoted; take up to next space.
+			sp := strings.IndexByte(rest, ' ')
+			if sp >= 0 {
+				params[key] = rest[:sp]
+				rest = rest[sp+1:]
+			} else {
+				params[key] = rest
+				rest = ""
+			}
+			continue
+		}
+		// Quoted value: find closing quote, respecting escape sequences.
+		rest = rest[1:] // skip opening quote
+		var val strings.Builder
+		i := 0
+		for i < len(rest) {
+			c := rest[i]
+			if c == '\\' && i+1 < len(rest) {
+				// Escape sequence: take next char literally.
+				val.WriteByte(rest[i+1])
+				i += 2
+				continue
+			}
+			if c == '"' {
+				break // closing quote
+			}
+			val.WriteByte(c)
+			i++
+		}
+		params[key] = val.String()
+		if i < len(rest) {
+			rest = rest[i+1:] // skip closing quote
+		} else {
+			rest = ""
+		}
 	}
 	sd[sdID] = params
 }
 
 // parseTagAndMessage splits "tag[pid]: message" into tag, pid, message.
+//
+// To handle tags containing ": " (common in vendor devices that violate RFC
+// strictness), this function tries the "]: " separator (tag[pid]: message)
+// first, which is unambiguous. If no bracket pattern is found, it searches
+// for ": " positions and prefers one where the preceding text (the tag) has
+// no space — i.e. it is a single token — falling back to the first ": ".
 func parseTagAndMessage(s string) (tag, pid, message string) {
-	// Message starts after the first ": " (colon+space).
-	var msgStart int
-	if idx := strings.Index(s, ": "); idx >= 0 {
-		msgStart = idx + 2
-	} else {
-		msgStart = len(s)
-	}
-	header := s[:max(msgStart-2, 0)]
-	message = strings.TrimLeft(s[msgStart:], " ")
-
-	// tag may contain ':'; the trailing part up to '[' is the tag.
-	if open := strings.IndexByte(header, '['); open >= 0 {
-		tag = strings.TrimSpace(header[:open])
-		if close := strings.IndexByte(header[open+1:], ']'); close >= 0 {
-			pid = header[open+1 : open+1+close]
+	// Try tag[pid]: message — look for "]: " which reliably separates
+	// the tag[pid] portion from the message.
+	if bracketIdx := strings.Index(s, "]: "); bracketIdx >= 0 {
+		header := s[:bracketIdx+1] // includes ']'
+		message = strings.TrimLeft(s[bracketIdx+3:], " ")
+		if open := strings.IndexByte(header, '['); open >= 0 {
+			tag = strings.TrimSpace(header[:open])
+			// Extract pid between '[' and ']'.
+			pid = header[open+1 : len(header)-1]
+		} else {
+			tag = strings.TrimSpace(header)
 		}
+		return tag, pid, message
+	}
+
+	// No [pid] pattern; find ": " that separates tag from message.
+	// To handle tags containing ": " (e.g. "my:tag: message"), prefer
+	// a ": " position where the preceding text has no space (single-token tag).
+	bestIdx := -1
+	searchFrom := 0
+	for {
+		idx := strings.Index(s[searchFrom:], ": ")
+		if idx < 0 {
+			break
+		}
+		absIdx := searchFrom + idx
+		header := s[:absIdx]
+		if !strings.Contains(header, " ") {
+			bestIdx = absIdx
+			break // preferred: single-token tag
+		}
+		if bestIdx < 0 {
+			bestIdx = absIdx // fallback: first ": "
+		}
+		searchFrom = absIdx + 2
+	}
+
+	if bestIdx >= 0 {
+		tag = strings.TrimSpace(s[:bestIdx])
+		message = strings.TrimLeft(s[bestIdx+2:], " ")
 	} else {
-		tag = strings.TrimSpace(header)
+		// No ": " found; entire string is the message.
+		message = strings.TrimLeft(s, " ")
 	}
 	return tag, pid, message
 }
@@ -287,6 +407,13 @@ func parseRFC3339(s string) time.Time {
 
 // parseRFC3164Timestamp parses "Jan _2 15:04:05" (RFC3164 header). Year is
 // inferred from the current year. Returns the time and the remaining text.
+//
+// Year inference: RFC3164 timestamps carry no year. We assume the current
+// year; if the resulting date is more than 2 days in the future (allowing for
+// timezone differences and minor clock drift), we roll it back to the
+// previous year. The 48-hour threshold is more robust than 24h against
+// cross-timezone edge cases where "now" in the device's local time may differ
+// from the daemon's local time by several hours.
 func parseRFC3164Timestamp(s string) (time.Time, string, error) {
 	// Month is 3 letters; consume it.
 	if len(s) < 15 {
@@ -318,8 +445,8 @@ func parseRFC3164Timestamp(s string) (time.Time, string, error) {
 	if perr != nil {
 		return time.Time{}, "", perr
 	}
-	// If the parsed date is more than ~1 day in the future, assume previous year.
-	if t.After(now.Add(24 * time.Hour)) {
+	// If the parsed date is more than 2 days in the future, assume previous year.
+	if t.After(now.Add(48 * time.Hour)) {
 		t = t.AddDate(-1, 0, 0)
 	}
 	return t, rest, nil
@@ -362,11 +489,4 @@ func monthNum(m string) (int, error) {
 		return n, nil
 	}
 	return 0, fmt.Errorf("rfc3164: bad month %q", m)
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

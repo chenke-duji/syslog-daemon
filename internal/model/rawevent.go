@@ -6,7 +6,6 @@ package model
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -114,22 +113,19 @@ func renderRawText(msg *syslog.Message, sourceIP string) string {
 }
 
 // deterministicHash returns a stable int64 derived from a string.
+// Uses the first 8 bytes of SHA-256 as an unsigned 63-bit value to avoid
+// sign-overflow concerns from the left-shift accumulation.
 func deterministicHash(s string) int64 {
 	sum := sha256.Sum256([]byte(s))
-	var v int64
+	var u uint64
 	for i := 0; i < 8; i++ {
-		v = v<<8 | int64(sum[i])
+		u = u<<8 | uint64(sum[i])
 	}
-	if v < 0 {
-		v = -v
+	v := int64(u &^ (1 << 63)) // clear sign bit
+	if v == 0 {
+		v = 1 // ensure non-zero return
 	}
 	return v
-}
-
-// checksum returns the hex SHA-256 of a byte payload (used by tests/forwarder).
-func checksum(payload []byte) string {
-	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:])
 }
 
 // facilityLabel maps a syslog facility code to its RFC3164 label.

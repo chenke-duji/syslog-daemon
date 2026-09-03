@@ -1,0 +1,58 @@
+# ============================================================================
+# golangci-lint configuration for syslog-daemon
+# ============================================================================
+# Enforces a baseline of code quality on every CI run and local `make lint`.
+# Tuned for a Go 1.22 syslog daemon: security-conscious, zero allocation leaks,
+# strict error handling, no unchecked type assertions.
+
+run:
+  timeout: 5m
+  go: '1.22'
+
+linters:
+  enable:
+    - errcheck       # Ensure all errors are checked
+    - gosimple       # Simplifications
+    - govet          # go vet
+    - ineffassign    # Detect ineffectual assignments
+    - staticcheck    # Static analysis suite
+    - unused         # Find unused code
+    - gosec          # Security checks (G101 hardcoded creds, G304 file path, etc.)
+    - gocritic       # Common pitfalls
+    - bodyclose      # Ensure HTTP response bodies are closed
+    - nilerr         # Return nil when err != nil
+    - prealloc       # Slice pre-allocation hints
+    - unconvert      # Detect unnecessary type conversions
+    - misspell       # Spelling mistakes in comments/strings
+    - revive         # Linter replacement for golint
+
+linters-settings:
+  gosec:
+    excludes:
+      - G104  # Allow unhandled errors in audit-type calls (we use errcheck for real cases)
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+  revive:
+    rules:
+      - name: exported
+        disabled: true  # Internal package; no need for doc comments on exports
+      - name: var-naming
+      - name: increment-decrement
+
+issues:
+  exclude-rules:
+    # Test files: allow unhandled errors and magic numbers.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gocritic
+    # main.go: allow Exit(1) without checking (intentional fatal exit).
+    - path: cmd/syslogd/main\.go
+      linters:
+        - gosec
+      text: "G104"
+  max-issues-per-linter: 0
+  max-same-issues: 0

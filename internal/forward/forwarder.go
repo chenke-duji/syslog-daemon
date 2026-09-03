@@ -1,4 +1,4 @@
-// Package forward transports RawEvents from trap-daemon to cep-engine.
+// Package forward transports RawEvents from syslog-daemon to cep-engine.
 // The primary transport is REST HTTP (batch POST); Kafka is a reserved,
 // optional alternative channel. All forwarders implement the Forwarder
 // interface so the batch queue can be transport-agnostic.

@@ -22,10 +22,10 @@ type Recorder interface {
 // noopRecorder is the default recorder when metrics are disabled.
 type noopRecorder struct{}
 
-func (noopRecorder) IncReceived()            {}
-func (noopRecorder) IncForwarded(int)        {}
-func (noopRecorder) IncForwardFailed(int)    {}
-func (noopRecorder) IncDropped(int)          {}
+func (noopRecorder) IncReceived()         {}
+func (noopRecorder) IncForwarded(int)     {}
+func (noopRecorder) IncForwardFailed(int) {}
+func (noopRecorder) IncDropped(int)       {}
 
 // BatchQueue is a bounded, multi-worker forwarding queue with backpressure.
 // Producers call Enqueue; workers batch events and push them through a
@@ -153,7 +153,8 @@ func (q *BatchQueue) worker() {
 		batch := []model.RawEvent{*event}
 		flushInterval := time.Duration(q.cfg.BatchFlushInterval) * time.Millisecond
 		timer := time.NewTimer(flushInterval)
-		for len(batch) < q.cfg.BatchSize {
+		flushed := false
+		for !flushed && len(batch) < q.cfg.BatchSize {
 			select {
 			case e, ok := <-q.ch:
 				if !ok {
@@ -164,12 +165,13 @@ func (q *BatchQueue) worker() {
 				batch = append(batch, *e)
 			case <-timer.C:
 				q.flush(batch)
-				goto flushed
+				flushed = true
 			}
 		}
-		timer.Stop()
-		q.flush(batch)
-	flushed:
+		if !flushed {
+			timer.Stop()
+			q.flush(batch)
+		}
 	}
 }
 
@@ -187,11 +189,12 @@ func (q *BatchQueue) flush(batch []model.RawEvent) {
 }
 
 // Close stops the queue, flushes any remaining buffered events, and waits for
-// workers to finish.
+// workers to finish. The channel is closed first so workers drain remaining
+// events; cancel is called after workers exit to release any blocking selects.
 func (q *BatchQueue) Close() {
-	q.cancel()
 	close(q.ch)
 	q.wg.Wait()
+	q.cancel()
 }
 
 // metaString extracts a string value from the metadata map for logging.

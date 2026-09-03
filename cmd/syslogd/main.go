@@ -53,13 +53,13 @@ func main() {
 
 	// --- Forwarder (HTTP to cep-engine) ---
 	httpFwd, err := forward.NewHTTPForwarder(forward.HTTPConfig{
-		BaseURL:   cfg.CEPEngine.BaseURL,
-		BatchPath: cfg.CEPEngine.BatchPath,
+		BaseURL:    cfg.CEPEngine.BaseURL,
+		BatchPath:  cfg.CEPEngine.BatchPath,
 		SinglePath: cfg.CEPEngine.SinglePath,
-		AuthToken: cfg.CEPEngine.AuthToken,
-		Timeout:   cfg.CEPEngine.Timeout,
-		RetryMax:  cfg.CEPEngine.RetryMax,
-		RetryBase: cfg.CEPEngine.RetryBase,
+		AuthToken:  cfg.CEPEngine.AuthToken,
+		Timeout:    cfg.CEPEngine.Timeout,
+		RetryMax:   cfg.CEPEngine.RetryMax,
+		RetryBase:  cfg.CEPEngine.RetryBase,
 	}, logger)
 	if err != nil {
 		logger.Error("forwarder init failed", "err", err)
@@ -89,7 +89,7 @@ func main() {
 
 	// --- Syslog listener ---
 	handle := func(msg *syslog.Message, sourceIP string) {
-		logger.Info("received syslog",
+		logger.Debug("received syslog",
 			"sourceIp", sourceIP,
 			"message", msg.Message,
 		)
@@ -99,10 +99,11 @@ func main() {
 		}
 	}
 	listener, err := syslog.NewListener(syslog.Config{
-		ListenAddr: cfg.Syslog.ListenAddr,
-		Workers:    cfg.Syslog.Workers,
-		ReadBuffer: cfg.Syslog.ReadBuffer,
-		MaxMessage: cfg.Syslog.MaxMessage,
+		ListenAddr:   cfg.Syslog.ListenAddr,
+		Workers:      cfg.Syslog.Workers,
+		ReadBuffer:   cfg.Syslog.ReadBuffer,
+		MaxMessage:   cfg.Syslog.MaxMessage,
+		AllowedCIDRs: cfg.Syslog.AllowedCIDRs,
 	}, handle, logger)
 	if err != nil {
 		logger.Error("listener init failed", "err", err)
@@ -129,7 +130,7 @@ func main() {
 	logger.Info("shutting down...")
 
 	if metricsSrv != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		_ = metricsSrv.Shutdown(ctx)
 		cancel()
 	}
@@ -167,7 +168,6 @@ type rotatingWriter struct {
 	maxSize    int64
 	maxBackups int
 	file       *os.File
-	writeErr   error
 }
 
 func newRotatingWriter(path string, maxSizeMB, maxBackups int) *rotatingWriter {
@@ -181,20 +181,29 @@ func newRotatingWriter(path string, maxSizeMB, maxBackups int) *rotatingWriter {
 func (w *rotatingWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.writeErr != nil {
-		return 0, w.writeErr
-	}
+
+	// Ensure file is open.
 	if w.file == nil {
-		f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
-			w.writeErr = err
 			return 0, err
 		}
 		w.file = f
 	}
+
+	// Rotate if this write would exceed the size limit.
 	if info, err := w.file.Stat(); err == nil && info.Size()+int64(len(p)) > w.maxSize {
 		w.rotate()
+		// rotate closes and nulls w.file; reopen for the new write.
+		if w.file == nil {
+			f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+			if err != nil {
+				return 0, err
+			}
+			w.file = f
+		}
 	}
+
 	return w.file.Write(p)
 }
 

@@ -8,6 +8,8 @@ syslog:
   workers: 8                      # concurrent processing workers (high-throughput)
   readBufferBytes: 4194304        # UDP socket receive buffer (4 MiB)
   maxMessageBytes: 65536          # max syslog message size (64 KiB)
+  allowedCIDRs: []                # optional source IP/CIDR allowlist; empty accepts all (insecure)
+                                  # example: ["10.0.0.0/8", "192.168.1.100/32"]
 
 # ---- Downstream cep-engine ----
 cepEngine:
@@ -38,5 +40,5 @@ logging:
 # ---- Prometheus self-monitoring ----
 metrics:
   enabled: true
-  listenAddr: ":9092"
+  listenAddr: "127.0.0.1:9092"    # metrics HTTP listen addr (default localhost only)
   path: "/metrics"

@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -15,29 +16,30 @@ import (
 
 // SyslogConfig holds the UDP syslog listener settings.
 type SyslogConfig struct {
-	ListenAddr     string `yaml:"listenAddr"`     // e.g. "0.0.0.0:514"
-	Workers        int    `yaml:"workers"`        // concurrent processing workers
-	ReadBuffer     int    `yaml:"readBufferBytes"` // UDP socket receive buffer
-	MaxMessage     int    `yaml:"maxMessageBytes"` // max syslog message size
+	ListenAddr   string   `yaml:"listenAddr"`      // e.g. "0.0.0.0:514"
+	Workers      int      `yaml:"workers"`         // concurrent processing workers
+	ReadBuffer   int      `yaml:"readBufferBytes"` // UDP socket receive buffer
+	MaxMessage   int      `yaml:"maxMessageBytes"` // max syslog message size
+	AllowedCIDRs []string `yaml:"allowedCIDRs"`    // optional source IP/CIDR allowlist; empty accepts all
 }
 
 // CEPEngineConfig describes the downstream cep-engine REST endpoint.
 type CEPEngineConfig struct {
-	BaseURL   string `yaml:"baseUrl"`
-	BatchPath string `yaml:"batchPath"`
+	BaseURL    string `yaml:"baseUrl"`
+	BatchPath  string `yaml:"batchPath"`
 	SinglePath string `yaml:"singlePath"`
-	AuthToken string `yaml:"authToken"`
-	Timeout   int    `yaml:"timeoutMs"`
-	RetryMax  int    `yaml:"retryMax"`
-	RetryBase int    `yaml:"retryBaseMs"`
+	AuthToken  string `yaml:"authToken"`
+	Timeout    int    `yaml:"timeoutMs"`
+	RetryMax   int    `yaml:"retryMax"`
+	RetryBase  int    `yaml:"retryBaseMs"`
 }
 
 // LoggingConfig controls log level and output file rotation settings.
 type LoggingConfig struct {
-	Level     string `yaml:"level"` // debug | info | warn | error
-	File      string `yaml:"file"`  // empty -> stdout
-	MaxSizeMB int    `yaml:"maxSizeMB"`
-	MaxBackups int   `yaml:"maxBackups"`
+	Level      string `yaml:"level"` // debug | info | warn | error
+	File       string `yaml:"file"`  // empty -> stdout
+	MaxSizeMB  int    `yaml:"maxSizeMB"`
+	MaxBackups int    `yaml:"maxBackups"`
 }
 
 // MetricsConfig controls the Prometheus self-monitoring endpoint.
@@ -49,11 +51,11 @@ type MetricsConfig struct {
 
 // Config is the root configuration.
 type Config struct {
-	Syslog    SyslogConfig        `yaml:"syslog"`
-	CEPEngine CEPEngineConfig     `yaml:"cepEngine"`
+	Syslog    SyslogConfig          `yaml:"syslog"`
+	CEPEngine CEPEngineConfig       `yaml:"cepEngine"`
 	Forward   forward.ForwardConfig `yaml:"forward"`
-	Logging   LoggingConfig       `yaml:"logging"`
-	Metrics   MetricsConfig       `yaml:"metrics"`
+	Logging   LoggingConfig         `yaml:"logging"`
+	Metrics   MetricsConfig         `yaml:"metrics"`
 }
 
 // Load reads a YAML config file and applies defaults and env overrides.
@@ -99,7 +101,7 @@ func defaultConfig() *Config {
 			MaxBackups: 5,
 		},
 		Metrics: MetricsConfig{
-			ListenAddr: ":9092",
+			ListenAddr: "127.0.0.1:9092",
 			Path:       "/metrics",
 		},
 	}
@@ -107,8 +109,11 @@ func defaultConfig() *Config {
 
 // applyEnv applies simple SYSD_* environment overrides. Format:
 //
-//	SYSD_SYSLOG_LISTENADDR, SYSD_CEPENGINE_BASEURL, SYSD_LOGGING_LEVEL,
-//	SYSD_METRICS_ENABLED, ...
+//	SYSD_SYSLOG_LISTENADDR, SYSD_SYSLOG_WORKERS, SYSD_SYSLOG_READBUFFER,
+//	SYSD_SYSLOG_MAXMESSAGE, SYSD_SYSLOG_ALLOWED_CIDRS,
+//	SYSD_CEPENGINE_BASEURL, SYSD_CEPENGINE_AUTHTOKEN,
+//	SYSD_LOGGING_LEVEL, SYSD_LOGGING_FILE,
+//	SYSD_METRICS_ENABLED, SYSD_METRICS_LISTENADDR, SYSD_METRICS_PATH
 func applyEnv(cfg *Config) {
 	setStr := func(env string, dst *string) {
 		if v := os.Getenv(env); v != "" {
@@ -124,6 +129,25 @@ func applyEnv(cfg *Config) {
 	setStr("SYSD_METRICS_PATH", &cfg.Metrics.Path)
 	if v := os.Getenv("SYSD_METRICS_ENABLED"); v != "" {
 		cfg.Metrics.Enabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("SYSD_SYSLOG_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Syslog.Workers = n
+		}
+	}
+	if v := os.Getenv("SYSD_SYSLOG_READBUFFER"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Syslog.ReadBuffer = n
+		}
+	}
+	if v := os.Getenv("SYSD_SYSLOG_MAXMESSAGE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Syslog.MaxMessage = n
+		}
+	}
+	// AllowedCIDRs: support comma-separated list.
+	if v := os.Getenv("SYSD_SYSLOG_ALLOWED_CIDRS"); v != "" {
+		cfg.Syslog.AllowedCIDRs = splitCommaList(v)
 	}
 }
 
@@ -150,4 +174,18 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("config: unsupported forward.queueFullPolicy %q", cfg.Forward.QueueFullPolicy)
 	}
 	return nil
+}
+
+// splitCommaList splits a comma-separated string, trimming whitespace and
+// dropping empty entries.
+func splitCommaList(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

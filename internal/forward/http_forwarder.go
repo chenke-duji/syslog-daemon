@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"syslog-daemon/internal/model"
@@ -16,13 +18,13 @@ import (
 
 // HTTPConfig holds the cep-engine endpoint settings.
 type HTTPConfig struct {
-	BaseURL   string `yaml:"baseUrl"`
-	BatchPath string `yaml:"batchPath"`
+	BaseURL    string `yaml:"baseUrl"`
+	BatchPath  string `yaml:"batchPath"`
 	SinglePath string `yaml:"singlePath"`
-	AuthToken string `yaml:"authToken"`
-	Timeout   int    `yaml:"timeoutMs"`    // per-request timeout in ms
-	RetryMax  int    `yaml:"retryMax"`     // max retries
-	RetryBase int    `yaml:"retryBaseMs"`  // exponential backoff base in ms
+	AuthToken  string `yaml:"authToken"`
+	Timeout    int    `yaml:"timeoutMs"`   // per-request timeout in ms
+	RetryMax   int    `yaml:"retryMax"`    // max retries
+	RetryBase  int    `yaml:"retryBaseMs"` // exponential backoff base in ms
 }
 
 // HTTPForwarder posts RawEvents to cep-engine over REST.
@@ -41,6 +43,11 @@ type HTTPForwarder struct {
 func NewHTTPForwarder(cfg HTTPConfig, log *slog.Logger) (*HTTPForwarder, error) {
 	if cfg.BaseURL == "" {
 		return nil, fmt.Errorf("forward: cepEngine.baseUrl is required")
+	}
+	// Warn if the endpoint uses plaintext HTTP with an auth token.
+	if strings.HasPrefix(cfg.BaseURL, "http://") && cfg.AuthToken != "" {
+		log.Warn("forward: authToken will be sent over plaintext HTTP; use HTTPS if possible",
+			"baseUrl", cfg.BaseURL)
 	}
 	if cfg.BatchPath == "" {
 		cfg.BatchPath = "/api/v1/events/batch"
@@ -109,6 +116,11 @@ func (h *HTTPForwarder) postWithRetry(ctx context.Context, url string, body []by
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			// Do not retry on non-retriable HTTP errors (4xx except 429).
+			var se *httpStatusError
+			if errors.As(err, &se) && !isRetriableStatus(se.statusCode) {
+				return err
+			}
 			if attempt < h.retryMax {
 				wait := h.retryBase * time.Duration(math.Pow(2, float64(attempt)))
 				h.log.Warn("forward: POST failed, retrying", "url", url, "attempt", attempt+1, "err", err)
@@ -140,11 +152,29 @@ func (h *HTTPForwarder) postOnce(ctx context.Context, url string, body []byte) e
 		return err
 	}
 	defer resp.Body.Close()
-	// Drain a little for connection reuse.
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	// Fully drain the body to allow connection reuse.
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+		return &httpStatusError{statusCode: resp.StatusCode}
 	}
 	return nil
+}
+
+// httpStatusError carries the HTTP status code for retry decisions.
+type httpStatusError struct {
+	statusCode int
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("unexpected HTTP status %d", e.statusCode)
+}
+
+// isRetriableStatus returns true for server errors (5xx) and 429 (Too Many
+// Requests); false for other 4xx client errors.
+func isRetriableStatus(statusCode int) bool {
+	if statusCode >= 500 {
+		return true
+	}
+	return statusCode == 429
 }

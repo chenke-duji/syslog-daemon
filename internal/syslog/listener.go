@@ -2,9 +2,12 @@ package syslog
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,12 +18,13 @@ type HandleFunc func(msg *Message, sourceIP string)
 // Listener receives syslog messages over UDP and dispatches them to a pool of
 // worker goroutines for high throughput.
 type Listener struct {
-	addr       string
-	readBuffer int          // SO_RCVBUF size in bytes (0 = kernel default)
-	workers    int          // number of processing workers
-	batchMsgs  int          // max syslog message size
-	handle     HandleFunc
-	log        *slog.Logger
+	addr        string
+	readBuffer  int          // SO_RCVBUF size in bytes (0 = kernel default)
+	workers     int          // number of processing workers
+	maxMsgSize  int          // max syslog message size
+	allowedNets []*net.IPNet // optional source IP/CIDR allowlist; empty = accept all
+	handle      HandleFunc
+	log         *slog.Logger
 
 	conn     *net.UDPConn
 	wg       sync.WaitGroup
@@ -36,10 +40,11 @@ type packet struct {
 
 // Config holds listener tuning parameters.
 type Config struct {
-	ListenAddr string `yaml:"listenAddr"`
-	Workers    int    `yaml:"workers"`
-	ReadBuffer int    `yaml:"readBufferBytes"`
-	MaxMessage int    `yaml:"maxMessageBytes"`
+	ListenAddr   string   `yaml:"listenAddr"`
+	Workers      int      `yaml:"workers"`
+	ReadBuffer   int      `yaml:"readBufferBytes"`
+	MaxMessage   int      `yaml:"maxMessageBytes"`
+	AllowedCIDRs []string `yaml:"allowedCIDRs"`
 }
 
 // DefaultConfig returns sensible listener defaults.
@@ -69,13 +74,43 @@ func NewListener(cfg Config, handle HandleFunc, log *slog.Logger) (*Listener, er
 	if log == nil {
 		log = slog.Default()
 	}
+
+	// Parse CIDR allowlist.
+	var allowedNets []*net.IPNet
+	if len(cfg.AllowedCIDRs) > 0 {
+		allowedNets = make([]*net.IPNet, 0, len(cfg.AllowedCIDRs))
+		for _, cidr := range cfg.AllowedCIDRs {
+			// If no /prefix, treat as /32 (IPv4) or /128 (IPv6).
+			if !strings.Contains(cidr, "/") {
+				ip := net.ParseIP(cidr)
+				if ip == nil {
+					return nil, fmt.Errorf("syslog: invalid allowedCIDRs entry %q", cidr)
+				}
+				if ip.To4() != nil {
+					cidr += "/32"
+				} else {
+					cidr += "/128"
+				}
+			}
+			_, ipNet, err := net.ParseCIDR(cidr)
+			if err != nil {
+				return nil, fmt.Errorf("syslog: invalid allowedCIDRs entry %q: %w", cidr, err)
+			}
+			allowedNets = append(allowedNets, ipNet)
+		}
+		log.Info("syslog source IP allowlist configured", "entries", len(allowedNets))
+	} else {
+		log.Warn("no allowedCIDRs configured; all source IPs will be accepted (insecure)")
+	}
+
 	return &Listener{
-		addr:       cfg.ListenAddr,
-		readBuffer: cfg.ReadBuffer,
-		workers:    cfg.Workers,
-		batchMsgs:  cfg.MaxMessage,
-		handle:     handle,
-		log:        log,
+		addr:        cfg.ListenAddr,
+		readBuffer:  cfg.ReadBuffer,
+		workers:     cfg.Workers,
+		maxMsgSize:  cfg.MaxMessage,
+		allowedNets: allowedNets,
+		handle:      handle,
+		log:         log,
 	}, nil
 }
 
@@ -99,8 +134,7 @@ func (l *Listener) Start() error {
 
 	// Worker pool: each worker owns a buffered channel to avoid lock contention.
 	l.handlers = make([]chan *packet, l.workers)
-	next := 0
-	var mutex sync.Mutex
+	var next atomic.Uint64
 	for i := 0; i < l.workers; i++ {
 		ch := make(chan *packet, 1024)
 		l.handlers[i] = ch
@@ -111,7 +145,7 @@ func (l *Listener) Start() error {
 	// Reader goroutine(s): pull datagrams and round-robin to workers.
 	reader := func() {
 		defer l.wg.Done()
-		buf := make([]byte, l.batchMsgs)
+		buf := make([]byte, l.maxMsgSize)
 		for {
 			n, addr, err := conn.ReadFromUDP(buf)
 			if err != nil {
@@ -130,10 +164,7 @@ func (l *Listener) Start() error {
 			data := make([]byte, n)
 			copy(data, buf[:n])
 			pkt := &packet{data: data, addr: addr}
-			mutex.Lock()
-			idx := next
-			next = (next + 1) % l.workers
-			mutex.Unlock()
+			idx := int(next.Add(1) % uint64(l.workers))
 			select {
 			case l.handlers[idx] <- pkt:
 			case <-ctx.Done():
@@ -170,6 +201,23 @@ func (l *Listener) worker(ctx context.Context, ch <-chan *packet) {
 }
 
 func (l *Listener) process(pkt *packet) {
+	// Source IP allowlist check.
+	if len(l.allowedNets) > 0 && pkt.addr != nil {
+		ip := pkt.addr.IP
+		allowed := false
+		for _, n := range l.allowedNets {
+			if n.Contains(ip) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			l.log.Warn("syslog: packet from non-allowlisted source dropped",
+				"sourceIp", ip.String())
+			return
+		}
+	}
+
 	msg, err := Parse(string(pkt.data))
 	if err != nil {
 		// Still forward lenient-parsed message if it has content.
