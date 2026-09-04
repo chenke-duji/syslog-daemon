@@ -9,3 +9,6 @@ build-wsl.sh
 # Logs
 *.log
 logs/
+
+# Stale exe in root
+*.exe

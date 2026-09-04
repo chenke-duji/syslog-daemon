@@ -5,7 +5,6 @@
 package model
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"strings"
 	"time"
@@ -79,16 +78,22 @@ func NewFromSyslog(msg *syslog.Message, sourceIP string, receivedAt time.Time) *
 
 	rawText := renderRawText(msg, sourceIP)
 
-	origin := msg.Timestamp
-	if origin.IsZero() {
-		origin = time.UnixMilli(deterministicHash(msg.Raw))
+	// OriginTimestamp: use the parsed syslog timestamp (millis, UTC).
+	// When timestamp parsing fails, leave it 0 — NOT a hash. A hash value
+	// is not a real timestamp and would produce nonsensical firstOccurrence
+	// values in the Groovy parser. Two Active-Active collectors will both
+	// send 0, so transport dedup (fingerprint includes originTimestamp)
+	// still works; the Groovy parser falls through to System.currentTimeMillis().
+	var originTs int64
+	if !msg.Timestamp.IsZero() {
+		originTs = msg.Timestamp.UnixMilli()
 	}
 
 	return &RawEvent{
 		Source:          SourceSyslog,
 		SourceIP:        sourceIP,
 		ReceivedAt:      receivedAt.UnixMilli(),
-		OriginTimestamp: origin.UnixMilli(),
+		OriginTimestamp: originTs,
 		RawEvent:        rawText,
 		Metadata:        metadata,
 	}
@@ -110,23 +115,6 @@ func renderRawText(msg *syslog.Message, sourceIP string) string {
 	}
 	fmt.Fprintf(&b, "message: %s\n", msg.Message)
 	return b.String()
-}
-
-// deterministicHash returns a stable int64 derived from a string.
-// Uses the first 8 bytes of SHA-256 as an unsigned 63-bit value to avoid
-// sign-overflow concerns from the left-shift accumulation.
-func deterministicHash(s string) int64 {
-	sum := sha256.Sum256([]byte(s))
-	var u uint64
-	for i := 0; i < 8; i++ {
-		u = u<<8 | uint64(sum[i])
-	}
-	// Clear the sign bit so the value fits in int64 without overflow.
-	v := int64(u &^ (1 << 63)) //#nosec G115 -- masked to <= 2^63-1, conversion is safe
-	if v == 0 {
-		v = 1 // ensure non-zero return
-	}
-	return v
 }
 
 // facilityLabel maps a syslog facility code to its RFC3164 label.

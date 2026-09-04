@@ -424,8 +424,17 @@ func parseRFC3164Timestamp(s string) (time.Time, string, error) {
 	if day == 0 {
 		return time.Time{}, "", fmt.Errorf("rfc3164: bad day")
 	}
-	// Time hh:mm:ss.
 	rest = strings.TrimLeft(rest, " ")
+
+	// Huawei/Cisco variant: "Mmm dd YYYY HH:MM:SS" — a 4-digit year is
+	// embedded between the day and the time. Standard RFC3164 has no year.
+	explicitYear := 0
+	if len(rest) >= 5 && isDigits(rest[:4]) && rest[4] == ' ' {
+		explicitYear, _ = strconv.Atoi(rest[:4])
+		rest = strings.TrimLeft(rest[4:], " ")
+	}
+
+	// Time hh:mm:ss.
 	if len(rest) < 8 {
 		return time.Time{}, "", fmt.Errorf("rfc3164: short time")
 	}
@@ -437,14 +446,19 @@ func parseRFC3164Timestamp(s string) (time.Time, string, error) {
 	if err != nil {
 		return time.Time{}, "", err
 	}
+	year := explicitYear
+	if year == 0 {
+		year = now.Year()
+	}
 	layout := "2006-01-02 15:04:05"
-	dateStr := fmt.Sprintf("%04d-%02d-%02d %s", now.Year(), month, day, timeStr)
+	dateStr := fmt.Sprintf("%04d-%02d-%02d %s", year, month, day, timeStr)
 	t, perr := time.ParseInLocation(layout, dateStr, now.Location())
 	if perr != nil {
 		return time.Time{}, "", perr
 	}
-	// If the parsed date is more than 2 days in the future, assume previous year.
-	if t.After(now.Add(48 * time.Hour)) {
+	// If the year was inferred (not explicit) and the parsed date is more
+	// than 2 days in the future, assume previous year.
+	if explicitYear == 0 && t.After(now.Add(48*time.Hour)) {
 		t = t.AddDate(-1, 0, 0)
 	}
 	return t, rest, nil
