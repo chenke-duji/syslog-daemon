@@ -60,13 +60,13 @@ func (m *Metrics) IncReceived() {
 }
 
 // IncForwarded records n successfully forwarded events.
-func (m *Metrics) IncForwarded(n int) { m.forwarded.Add(uint64(n)) }
+func (m *Metrics) IncForwarded(n uint64) { m.forwarded.Add(n) }
 
 // IncForwardFailed records n failed forward attempts.
-func (m *Metrics) IncForwardFailed(n int) { m.failed.Add(uint64(n)) }
+func (m *Metrics) IncForwardFailed(n uint64) { m.failed.Add(n) }
 
 // IncDropped records n dropped events.
-func (m *Metrics) IncDropped(n int) { m.dropped.Add(uint64(n)) }
+func (m *Metrics) IncDropped(n uint64) { m.dropped.Add(n) }
 
 // through5m computes the average received events/sec over the last 5 minutes.
 func (m *Metrics) through5m() float64 {

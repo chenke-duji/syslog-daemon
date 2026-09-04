@@ -44,11 +44,13 @@ linters-settings:
 
 issues:
   exclude-rules:
-    # Test files: allow unhandled errors and magic numbers.
+    # Test files: allow unhandled errors, magic numbers, and integer
+    # conversions whose ranges are safe within test fixtures.
     - path: _test\.go
       linters:
         - errcheck
         - gocritic
+        - gosec
     # main.go: allow Exit(1) without checking (intentional fatal exit).
     - path: cmd/syslogd/main\.go
       linters:

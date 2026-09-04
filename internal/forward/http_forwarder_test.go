@@ -27,7 +27,7 @@ func TestHTTPForwardBatchContract(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f, err := NewHTTPForwarder(HTTPConfig{
+	f, err := NewHTTPForwarder(&HTTPConfig{
 		BaseURL:   srv.URL,
 		BatchPath: "/api/v1/events/batch",
 		AuthToken: "sekret",
@@ -107,7 +107,7 @@ func TestHTTPForwardRetryAndFail(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f, err := NewHTTPForwarder(HTTPConfig{
+	f, err := NewHTTPForwarder(&HTTPConfig{
 		BaseURL:   srv.URL,
 		BatchPath: "/api/v1/events/batch",
 		Timeout:   1000,

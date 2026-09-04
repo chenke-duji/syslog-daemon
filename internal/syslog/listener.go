@@ -164,7 +164,7 @@ func (l *Listener) Start() error {
 			data := make([]byte, n)
 			copy(data, buf[:n])
 			pkt := &packet{data: data, addr: addr}
-			idx := int(next.Add(1) % uint64(l.workers))
+			idx := int(next.Add(1) % uint64(l.workers)) //#nosec G115 -- mod by positive workers bounds the result to int range
 			select {
 			case l.handlers[idx] <- pkt:
 			case <-ctx.Done():

@@ -40,7 +40,7 @@ type HTTPForwarder struct {
 }
 
 // NewHTTPForwarder builds an HTTP forwarder from config.
-func NewHTTPForwarder(cfg HTTPConfig, log *slog.Logger) (*HTTPForwarder, error) {
+func NewHTTPForwarder(cfg *HTTPConfig, log *slog.Logger) (*HTTPForwarder, error) {
 	if cfg.BaseURL == "" {
 		return nil, fmt.Errorf("forward: cepEngine.baseUrl is required")
 	}

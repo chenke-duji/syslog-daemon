@@ -43,16 +43,25 @@ func main() {
 		return
 	}
 
+	if err := run(configPath); err != nil {
+		slog.Error("fatal", "err", err)
+		os.Exit(1)
+	}
+}
+
+// run wires up the daemon and blocks until a termination signal is received.
+// It returns an error for any startup failure; graceful shutdown on signal
+// returns nil so defers (queue/forwarder/listener cleanup) always run.
+func run(configPath string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		slog.Error("config load failed", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("config load failed: %w", err)
 	}
 
 	logger := newLogger(cfg.Logging)
 
 	// --- Forwarder (HTTP to cep-engine) ---
-	httpFwd, err := forward.NewHTTPForwarder(forward.HTTPConfig{
+	httpFwd, err := forward.NewHTTPForwarder(&forward.HTTPConfig{
 		BaseURL:    cfg.CEPEngine.BaseURL,
 		BatchPath:  cfg.CEPEngine.BatchPath,
 		SinglePath: cfg.CEPEngine.SinglePath,
@@ -62,8 +71,7 @@ func main() {
 		RetryBase:  cfg.CEPEngine.RetryBase,
 	}, logger)
 	if err != nil {
-		logger.Error("forwarder init failed", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("forwarder init failed: %w", err)
 	}
 	defer func() { _ = httpFwd.Close() }()
 
@@ -78,7 +86,11 @@ func main() {
 		m := metrics.New(queue.QueueDepth)
 		mux := http.NewServeMux()
 		mux.Handle(cfg.Metrics.Path, m.Handler())
-		metricsSrv = &http.Server{Addr: cfg.Metrics.ListenAddr, Handler: mux}
+		metricsSrv = &http.Server{
+			Addr:              cfg.Metrics.ListenAddr,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second, // G112: mitigate Slowloris
+		}
 		go func() {
 			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Error("metrics server failed", "err", err)
@@ -106,12 +118,10 @@ func main() {
 		AllowedCIDRs: cfg.Syslog.AllowedCIDRs,
 	}, handle, logger)
 	if err != nil {
-		logger.Error("listener init failed", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("listener init failed: %w", err)
 	}
 	if err := listener.Start(); err != nil {
-		logger.Error("listener start failed", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("listener start failed: %w", err)
 	}
 	defer listener.Close()
 
@@ -134,6 +144,7 @@ func main() {
 		_ = metricsSrv.Shutdown(ctx)
 		cancel()
 	}
+	return nil
 }
 
 // newLogger builds a structured logger with optional file rotation.

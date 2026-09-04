@@ -121,7 +121,8 @@ func deterministicHash(s string) int64 {
 	for i := 0; i < 8; i++ {
 		u = u<<8 | uint64(sum[i])
 	}
-	v := int64(u &^ (1 << 63)) // clear sign bit
+	// Clear the sign bit so the value fits in int64 without overflow.
+	v := int64(u &^ (1 << 63)) //#nosec G115 -- masked to <= 2^63-1, conversion is safe
 	if v == 0 {
 		v = 1 // ensure non-zero return
 	}

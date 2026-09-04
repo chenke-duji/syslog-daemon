@@ -63,14 +63,14 @@ type countingRecorder struct {
 }
 
 func (c *countingRecorder) IncReceived() { c.mu.Lock(); c.received++; c.mu.Unlock() }
-func (c *countingRecorder) IncForwarded(n int) {
-	c.mu.Lock(); c.forward += n; c.mu.Unlock()
+func (c *countingRecorder) IncForwarded(n uint64) {
+	c.mu.Lock(); c.forward += int(n); c.mu.Unlock()
 }
-func (c *countingRecorder) IncForwardFailed(n int) {
-	c.mu.Lock(); c.failed += n; c.mu.Unlock()
+func (c *countingRecorder) IncForwardFailed(n uint64) {
+	c.mu.Lock(); c.failed += int(n); c.mu.Unlock()
 }
-func (c *countingRecorder) IncDropped(n int) {
-	c.mu.Lock(); c.dropped += n; c.mu.Unlock()
+func (c *countingRecorder) IncDropped(n uint64) {
+	c.mu.Lock(); c.dropped += int(n); c.mu.Unlock()
 }
 
 func (c *countingRecorder) get() (received, forwarded, failed, dropped int) {

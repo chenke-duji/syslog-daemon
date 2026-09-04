@@ -292,7 +292,7 @@ func parseSDElement(element string, sd map[string]map[string]string) {
 		}
 		key := rest[:eq]
 		rest = rest[eq+1:]
-		if len(rest) == 0 || rest[0] != '"' {
+		if rest == "" || rest[0] != '"' {
 			// Value is not quoted; take up to next space.
 			sp := strings.IndexByte(rest, ' ')
 			if sp >= 0 {

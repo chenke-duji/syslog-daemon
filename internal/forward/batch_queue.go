@@ -14,18 +14,18 @@ import (
 // import cycle (forward must not import metrics).
 type Recorder interface {
 	IncReceived()
-	IncForwarded(n int)
-	IncForwardFailed(n int)
-	IncDropped(n int)
+	IncForwarded(n uint64)
+	IncForwardFailed(n uint64)
+	IncDropped(n uint64)
 }
 
 // noopRecorder is the default recorder when metrics are disabled.
 type noopRecorder struct{}
 
-func (noopRecorder) IncReceived()         {}
-func (noopRecorder) IncForwarded(int)     {}
-func (noopRecorder) IncForwardFailed(int) {}
-func (noopRecorder) IncDropped(int)       {}
+func (noopRecorder) IncReceived()          {}
+func (noopRecorder) IncForwarded(uint64)   {}
+func (noopRecorder) IncForwardFailed(uint64) {}
+func (noopRecorder) IncDropped(uint64)       {}
 
 // BatchQueue is a bounded, multi-worker forwarding queue with backpressure.
 // Producers call Enqueue; workers batch events and push them through a
@@ -63,7 +63,7 @@ func NewBatchQueue(cfg ForwardConfig, f Forwarder, rec Recorder, log *slog.Logge
 		cfg.QueueCapacity = DefaultForwardConfig.QueueCapacity
 	}
 	if cfg.QueueFullPolicy == "" {
-		cfg.QueueFullPolicy = string(DefaultForwardConfig.QueueFullPolicy)
+		cfg.QueueFullPolicy = DefaultForwardConfig.QueueFullPolicy
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &BatchQueue{
@@ -181,11 +181,11 @@ func (q *BatchQueue) flush(batch []model.RawEvent) {
 		return
 	}
 	if err := q.forwarder.ForwardBatch(q.ctx, batch); err != nil {
-		q.recorder.IncForwardFailed(len(batch))
+		q.recorder.IncForwardFailed(uint64(len(batch)))
 		q.log.Error("forward: batch send failed", "count", len(batch), "err", err)
 		return
 	}
-	q.recorder.IncForwarded(len(batch))
+	q.recorder.IncForwarded(uint64(len(batch)))
 }
 
 // Close stops the queue, flushes any remaining buffered events, and waits for
