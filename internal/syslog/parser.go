@@ -27,7 +27,7 @@ func Parse(line string) (*Message, error) {
 	rest, fac, sev, err := parsePriority(raw)
 	if err != nil {
 		// No PRI: try lenient vendor parsing on the whole line.
-		return parseVendorLenient(raw, msg), nil //nolint:nilerr -- intentional fallback to lenient parsing
+		return parseVendorLenient(raw, msg), nil //nolint:nilerr // intentional fallback to lenient parsing
 	}
 	facCopy, sevCopy := fac, sev
 	msg.Facility = &facCopy
