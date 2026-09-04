@@ -106,9 +106,8 @@ func run(configPath string) error {
 			"message", msg.Message,
 		)
 		ev := model.NewFromSyslog(msg, sourceIP, time.Now())
-		if !queue.Enqueue(ev) {
-			// dropped; batch queue logs + counts it
-		}
+		// Enqueue drops and counts on its own when the queue is full.
+		queue.Enqueue(ev)
 	}
 	listener, err := syslog.NewListener(syslog.Config{
 		ListenAddr:   cfg.Syslog.ListenAddr,

@@ -35,6 +35,8 @@ linters-settings:
       - diagnostic
       - performance
       - style
+    disabled-checks:
+      - unnamedResult  # Multi-value returns read clearly without names; avoid noise
   revive:
     rules:
       - name: exported

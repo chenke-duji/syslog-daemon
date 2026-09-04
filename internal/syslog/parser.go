@@ -27,7 +27,7 @@ func Parse(line string) (*Message, error) {
 	rest, fac, sev, err := parsePriority(raw)
 	if err != nil {
 		// No PRI: try lenient vendor parsing on the whole line.
-		return parseVendorLenient(raw, msg), nil
+		return parseVendorLenient(raw, msg), nil //nolint:nilerr -- intentional fallback to lenient parsing
 	}
 	facCopy, sevCopy := fac, sev
 	msg.Facility = &facCopy
@@ -68,9 +68,7 @@ func parsePriority(line string) (string, int, int, error) {
 	}
 	rest := line[end+1:]
 	// Some devices emit "<PRI>:"; strip the stray colon.
-	if strings.HasPrefix(rest, ":") {
-		rest = rest[1:]
-	}
+	rest = strings.TrimPrefix(rest, ":")
 	// Some devices separate PRI with a space; skip a single leading space.
 	rest = strings.TrimLeft(rest, " ")
 	return rest, pri / 8, pri % 8, nil
@@ -235,7 +233,7 @@ func parseStructuredData(s string) (map[string]map[string]string, string) {
 // findSDElementEnd finds the index of the closing ']' for an SD element,
 // skipping ']' characters that appear inside quoted parameter values.
 func findSDElementEnd(s string) int {
-	if len(s) == 0 || s[0] != '[' {
+	if s == "" || s[0] != '[' {
 		return -1
 	}
 	inQuote := false
