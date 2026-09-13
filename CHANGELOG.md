@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **CHANGELOG.md**: this file, to track notable changes going forward.
+- **README throughput section**: documented measured throughput (receive
+  >30,000 msg/s; forward bottleneck ~13,000–14,000 msg/s).
 
 ---
 
