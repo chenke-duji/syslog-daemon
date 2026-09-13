@@ -75,17 +75,32 @@ func run(configPath string) error {
 	}
 	defer func() { _ = httpFwd.Close() }()
 
-	// --- Batch queue ---
-	queue := forward.NewBatchQueue(cfg.Forward, httpFwd, nil, logger)
+	// --- Metrics（先创建，闭包引用 queue，稍后绑定）---
+	var queue *forward.BatchQueue
+	var metricsImpl *metrics.Metrics
+	if cfg.Metrics.Enabled {
+		metricsImpl = metrics.New(func() int {
+			if queue != nil {
+				return queue.QueueDepth()
+			}
+			return 0
+		})
+	}
+
+	// --- Batch queue（把 metrics 作为 Recorder 传入，保证计数生效）---
+	var rec forward.Recorder
+	if metricsImpl != nil {
+		rec = metricsImpl
+	}
+	queue = forward.NewBatchQueue(cfg.Forward, httpFwd, rec, logger)
 	queue.Start()
 	defer queue.Close()
 
-	// --- Metrics ---
+	// --- Metrics server ---
 	var metricsSrv *http.Server
 	if cfg.Metrics.Enabled {
-		m := metrics.New(queue.QueueDepth)
 		mux := http.NewServeMux()
-		mux.Handle(cfg.Metrics.Path, m.Handler())
+		mux.Handle(cfg.Metrics.Path, metricsImpl.Handler())
 		metricsSrv = &http.Server{
 			Addr:              cfg.Metrics.ListenAddr,
 			Handler:           mux,
